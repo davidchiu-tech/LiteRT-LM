@@ -25,8 +25,21 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          lfs: false
+          lfs: true
           persist-credentials: false
+
+      - name: Verify the LFS prebuilts are real binaries.
+        run: |
+          set -euo pipefail
+          for f in prebuilt/android_arm64/libwebgpu_dawn.so \
+                   prebuilt/android_arm64/libGemmaModelConstraintProvider.so; do
+            size=$(wc -c < "$f")
+            if head -c 30 "$f" | grep -q "git-lfs.github.com"; then
+              echo "$f is still an LFS pointer ($size bytes)"
+              exit 1
+            fi
+            echo "$f ok, $size bytes"
+          done
 
       - name: Install Bazelisk
         run: |
