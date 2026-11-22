@@ -5,6 +5,9 @@
 name: "LiteRTLM-Android-Arm64-AAR"
 on:
   workflow_dispatch:
+  push:
+    branches:
+    - nightly-android-arm64-aar
 
 jobs:
   aar:
