@@ -114,6 +114,10 @@ jobs:
           mkdir -p out/aar/jni/arm64-v8a
           cp "$JAR" out/aar/classes.jar
           cp "$SO" out/aar/jni/arm64-v8a/liblitertlm_jni.so
+          # liblitertlm_jni.so has DT_NEEDED entries for these two LFS prebuilts; without them
+          # dlopen fails at runtime with `library "libGemmaModelConstraintProvider.so" not found`.
+          cp prebuilt/android_arm64/libwebgpu_dawn.so out/aar/jni/arm64-v8a/
+          cp prebuilt/android_arm64/libGemmaModelConstraintProvider.so out/aar/jni/arm64-v8a/
           : > out/aar/R.txt
           cat > out/aar/AndroidManifest.xml <<'XML'
           <?xml version="1.0" encoding="utf-8"?>
