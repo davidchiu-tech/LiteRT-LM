@@ -79,6 +79,13 @@ jobs:
       - name: Export NDK Home
         run: echo "ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}" >> "$GITHUB_ENV"
 
+      - name: Restore the bazel output base.
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.HOME }}/bazel-out
+          key: bazel-android-arm64-${{ github.sha }}
+          restore-keys: bazel-android-arm64-
+
       - name: Build the JNI library for arm64.
         run: |
           bazelisk --output_user_root="$HOME/bazel-out" build \
@@ -98,20 +105,24 @@ jobs:
       - name: Assemble the AAR.
         run: |
           set -euo pipefail
-          SO="$(find bazel-bin/kotlin/java/com/google/ai/edge/litertlm/jni -name 'liblitertlm_jni.so' | head -1)"
-          AAR="$(find bazel-bin/kotlin/java/com/google/ai/edge/litertlm -maxdepth 1 -name '*.aar' | head -1)"
-          echo "so=$SO"
-          echo "aar=$AAR"
-          test -n "$SO"
-          test -n "$AAR"
+          SO=bazel-bin/kotlin/java/com/google/ai/edge/litertlm/jni/liblitertlm_jni.so
+          JAR=bazel-bin/kotlin/java/com/google/ai/edge/litertlm/liblitertlm-android.jar
+          ls -l "$SO" "$JAR"
           patchelf --print-soname "$SO" || true
-          rm -rf out && mkdir -p out/aar out/jni/arm64-v8a
-          unzip -q "$AAR" -d out/aar
-          cp "$SO" out/jni/arm64-v8a/liblitertlm_jni.so
-          cp -r out/jni out/aar/jni
+          echo "classes in jar: $(unzip -l "$JAR" | grep -c 'com/google/ai/edge/litertlm')"
+          rm -rf out out/aar
+          mkdir -p out/aar/jni/arm64-v8a
+          cp "$JAR" out/aar/classes.jar
+          cp "$SO" out/aar/jni/arm64-v8a/liblitertlm_jni.so
+          : > out/aar/R.txt
+          cat > out/aar/AndroidManifest.xml <<'XML'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+              package="com.google.ai.edge.litertlm" />
+          XML
           (cd out/aar && zip -qr "$GITHUB_WORKSPACE/out/litertlm-android.aar" .)
           ls -l out/litertlm-android.aar
-          unzip -l out/litertlm-android.aar | head -20
+          unzip -l out/litertlm-android.aar
 
       - name: Upload the AAR.
         uses: actions/upload-artifact@v4
