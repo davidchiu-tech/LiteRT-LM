@@ -1,0 +1,110 @@
+# Builds the LiteRT-LM Android arm64 runtime and packages it as an AAR.
+#
+# Upstream only builds Android artifacts for `v*.*.*` tags, so nightly tags have no prebuilt
+# Android library. This workflow covers one nightly tag on a GitHub-hosted runner.
+name: "LiteRTLM-Android-Arm64-AAR"
+on:
+  workflow_dispatch:
+
+jobs:
+  aar:
+    name: "AAR-arm64"
+    runs-on: "ubuntu-latest"
+    timeout-minutes: 360
+    env:
+      CMAKE_BUILD_PARALLEL_LEVEL: "4"
+    steps:
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -yq openjdk-17-jdk-headless wget unzip patchelf
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          lfs: false
+          persist-credentials: false
+
+      - name: Install Bazelisk
+        run: |
+          curl -fsSL -o bazelisk https://github.com/bazelbuild/bazelisk/releases/download/v1.25.0/bazelisk-linux-amd64
+          sudo install -m 0755 bazelisk /usr/local/bin/bazelisk
+          bazelisk --version
+
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Install Android SDK
+        run: |
+          export ANDROID_HOME="$GITHUB_WORKSPACE/android-sdk"
+          mkdir -p "$ANDROID_HOME/cmdline-tools"
+          wget -qO cmdline-tools.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+          unzip -q cmdline-tools.zip -d "$ANDROID_HOME/cmdline-tools"
+          mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
+          rm cmdline-tools.zip
+          set +o pipefail
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0" > /dev/null
+          set -o pipefail
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+
+      - name: Setup Android NDK
+        id: setup-ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r28b
+          add-to-path: false
+
+      - name: Export NDK Home
+        run: echo "ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}" >> "$GITHUB_ENV"
+
+      - name: Build the JNI library for arm64.
+        run: |
+          bazelisk --output_user_root="$HOME/bazel-out" build \
+            --config=android_arm64 \
+            --jobs=4 \
+            --local_ram_resources=10240 \
+            //kotlin/java/com/google/ai/edge/litertlm/jni:litertlm_jni
+
+      - name: Build the Kotlin library for Android.
+        run: |
+          bazelisk --output_user_root="$HOME/bazel-out" build \
+            --config=android_arm64 \
+            --jobs=4 \
+            --local_ram_resources=10240 \
+            //kotlin/java/com/google/ai/edge/litertlm:litertlm-android
+
+      - name: Assemble the AAR.
+        run: |
+          set -euo pipefail
+          SO="$(find bazel-bin/kotlin/java/com/google/ai/edge/litertlm/jni -name 'liblitertlm_jni.so' | head -1)"
+          AAR="$(find bazel-bin/kotlin/java/com/google/ai/edge/litertlm -maxdepth 1 -name '*.aar' | head -1)"
+          echo "so=$SO"
+          echo "aar=$AAR"
+          test -n "$SO"
+          test -n "$AAR"
+          patchelf --print-soname "$SO" || true
+          rm -rf out && mkdir -p out/aar out/jni/arm64-v8a
+          unzip -q "$AAR" -d out/aar
+          cp "$SO" out/jni/arm64-v8a/liblitertlm_jni.so
+          cp -r out/jni out/aar/jni
+          (cd out/aar && zip -qr "$GITHUB_WORKSPACE/out/litertlm-android.aar" .)
+          ls -l out/litertlm-android.aar
+          unzip -l out/litertlm-android.aar | head -20
+
+      - name: Upload the AAR.
+        uses: actions/upload-artifact@v4
+        with:
+          name: litertlm-android-arm64-aar
+          path: out/litertlm-android.aar
+          if-no-files-found: error
+
+      - name: Show bazel failure output.
+        if: failure()
+        run: |
+          find "$HOME/bazel-out" -maxdepth 3 -name 'command.log' -exec tail -n 200 {} \; || true
